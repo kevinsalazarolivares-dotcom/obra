@@ -476,19 +476,39 @@
 
   <!--
     Clave del enlace: en Apps Script viene del template del servidor (`<?!= JSON.stringify(clave) ?>`).
-    Acá no hay servidor de por medio, así que se lee de la URL (?k=...) la primera vez, se guarda en
-    este teléfono (localStorage) y se saca de la URL (para que no quede pegada en el historial ni se
-    comparta sin querer); las próximas veces (ícono en la pantalla de inicio, sin ?k=) se lee de ahí.
+    Acá no hay servidor de por medio, así que se lee de la URL (?k=...) la primera vez y se guarda en
+    este teléfono (localStorage).
+
+    Bug real (encontrado por Kevin probando en su iPhone, no un caso hipotético): iOS **no comparte**
+    localStorage entre una pestaña normal de Safari y la misma página abierta como app instalada
+    (standalone) — son dos cajones de guardado separados, aunque sea el mismo sitio. Si acá se sacara
+    la clave de la URL apenas se lee (como se hacía antes), "Compartir → Agregar a pantalla de inicio"
+    guardaría un acceso directo SIN la clave (la URL ya habría quedado limpia para cuando el dedo llega
+    al botón Compartir — el script corre antes de que exista tiempo humano de reacción), y el ícono
+    instalado quedaría mostrando "Enlace no válido" para siempre, sin ninguna forma de arreglarlo desde
+    ahí (tocar el enlace del correo de nuevo solo vuelve a abrir Safari, nunca el ícono instalado).
+
+    Por eso la URL **solo** se limpia cuando la página ya se está ejecutando standalone (el ícono
+    instalado: ahí no hay barra de direcciones que mostrar, ni "Agregar a pantalla de inicio" pendiente
+    — esa URL, la que se guardó al crear el ícono, es fija de por vida). En una pestaña normal de
+    Safari se deja la clave a la vista en la URL a propósito, para que el acceso directo que se cree
+    desde ahí la lleve grabada. Contrapartida real: esa pestaña de Safari le queda con la clave en su
+    historial; si eso preocupa, cerrarla (o borrar el historial de Safari) después de crear el ícono, o
+    generar una clave nueva con Obras → Rotar clave si alguna vez se sospecha que alguien más la vio.
   -->
   <script>
     var CLAVE = (function () {
       var params = new URLSearchParams(location.search);
       var k = params.get('k');
+      var standalone = window.navigator.standalone === true ||
+        (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
       if (k) {
         try { localStorage.setItem('clave', k); } catch (e) {}
-        params.delete('k');
-        var resto = params.toString();
-        history.replaceState(null, '', location.pathname + (resto ? '?' + resto : '') + location.hash);
+        if (standalone) {
+          params.delete('k');
+          var resto = params.toString();
+          history.replaceState(null, '', location.pathname + (resto ? '?' + resto : '') + location.hash);
+        }
         return k;
       }
       try { return localStorage.getItem('clave') || ''; } catch (e) { return ''; }
@@ -1706,6 +1726,15 @@
     return acordado + ' · pagado ' + pesos(t.pagado) + ' (' + t.pct + '%) · ' + saldoTxt;
   }
 
+  /** Línea "N tareas en este proyecto (título, título…)" a partir de cotizacionesElegidas de detalle_. */
+  function resumenTareasSub(lista) {
+    if (!lista || !lista.length) return '';
+    var titulos = lista.map(function (x) { return x.tarea ? x.tarea.titulo : null; }).filter(Boolean);
+    var extra = titulos.length > 2 ? ' y ' + (titulos.length - 2) + ' más' : '';
+    return lista.length + ' tarea' + (lista.length === 1 ? '' : 's') + ' en este proyecto' +
+      (titulos.length ? ' (' + titulos.slice(0, 2).join(', ') + extra + ')' : '');
+  }
+
   PESTANA.subcontratos = function (p) {
     var links = S.d.subcontratistasProyectos.filter(function (r) { return r.proyectoId === p.id; });
     var h = [];
@@ -1714,7 +1743,18 @@
       h.push('<div class="barra-botones"><button class="btn btn-primario" data-a="ir" data-vista="subcontratistas">Agregar subcontratista</button></div>');
       return h.join('');
     }
+    var det = detalle(p.id);
+    // Subcontratistas con una tarea puntual asignada en este proyecto (cotización elegida) aunque
+    // nunca se les haya "Asignado" al proyecto a mano — pedido de Kevin, para no tener que agregarlos
+    // manualmente y para ver de un vistazo cuántas tareas tiene cada uno aquí.
+    var porSub = {};
+    if (det) {
+      det.cotizacionesElegidas.forEach(function (x) {
+        (porSub[x.cotizacion.subcontratistaId] = porSub[x.cotizacion.subcontratistaId] || []).push(x);
+      });
+    }
     var asignadosIds = links.map(function (r) { return r.subcontratistaId; });
+    var soloPorTareas = Object.keys(porSub).filter(function (id) { return asignadosIds.indexOf(id) < 0; });
     var disponibles = S.d.subcontratistas.filter(function (s) { return s.activo && asignadosIds.indexOf(s.id) < 0; });
     if (disponibles.length) {
       h.push('<form data-form="asignarSubProyecto"><input type="hidden" name="proyectoId" value="' + p.id + '">' +
@@ -1722,17 +1762,25 @@
         campo('Cómo resultó (opcional)', input('nota', '', 'maxlength="500" placeholder="Buena relación, cumplió los plazos…"')) +
         '<button type="submit" class="btn btn-primario">Asignar</button></form>');
     }
-    if (!links.length) return h.join('') + vacio('No hay subcontratistas asignados a este proyecto.');
+    if (!links.length && !soloPorTareas.length) return h.join('') + vacio('No hay subcontratistas asignados a este proyecto.');
     h.push('<div class="lista">' + links.map(function (r) {
       var s = porId(S.d.subcontratistas, r.subcontratistaId);
       var detalleTxt = [s && s.especialidad, r.nota].filter(Boolean).join(' — ');
       var trato = textoTrato(r);
+      var tareasTxt = resumenTareasSub(porSub[r.subcontratistaId]);
       return '<div class="item"><span class="principal"><span class="nombre">' + esc(s ? s.nombre : 'Subcontratista eliminado') + '</span>' +
         (detalleTxt ? '<span class="detalle">' + esc(detalleTxt) + '</span>' : '') +
-        (trato ? '<span class="detalle">' + esc(trato) + '</span>' : '') + '</span>' +
-        '<span class="acciones"><button class="btn btn-chico" data-a="pagarSubProyecto" data-sub="' + r.subcontratistaId + '" data-proyecto="' + p.id + '">Pagar</button>' +
+        (trato ? '<span class="detalle">' + esc(trato) + '</span>' : '') +
+        (tareasTxt ? '<span class="detalle">' + esc(tareasTxt) + '</span>' : '') + '</span>' +
+        '<span class="acciones"><button class="btn btn-chico" data-a="asignarSubTarea" data-sub="' + r.subcontratistaId + '" data-proyecto="' + p.id + '">A una tarea</button>' +
+        '<button class="btn btn-chico" data-a="pagarSubProyecto" data-sub="' + r.subcontratistaId + '" data-proyecto="' + p.id + '">Pagar</button>' +
         '<button class="btn btn-chico btn-plano" data-a="editarTratoSub" data-id="' + r.id + '" aria-label="Editar trato">Trato</button>' +
         '<button class="btn btn-chico btn-plano" data-a="quitarSubcontratistaProyecto" data-id="' + r.id + '" aria-label="Quitar">✕</button></span></div>';
+    }).join('') + soloPorTareas.map(function (subId) {
+      var s = porId(S.d.subcontratistas, subId);
+      return '<div class="item"><span class="principal"><span class="nombre">' + esc(s ? s.nombre : 'Subcontratista eliminado') + '</span>' +
+        '<span class="detalle">' + esc(resumenTareasSub(porSub[subId])) + ' — sin trato de proyecto pactado</span></span>' +
+        '<span class="acciones"><button class="btn btn-chico" data-a="asignarSubTarea" data-sub="' + subId + '" data-proyecto="' + p.id + '">A otra tarea</button></span></div>';
     }).join('') + '</div>');
     return h.join('');
   };
@@ -2484,6 +2532,7 @@
         '<div class="fila-campos">' + campo('Cuánto cobraría', input('monto', '', 'inputmode="numeric" required')) +
         campo('Nota (opcional)', input('nota', '', 'maxlength="200"')) + '</div>' +
         '<div class="campo"><span>Ese monto</span>' + chips('incluyeIva', [['true', 'Incluye IVA'], ['false', 'Es neto (falta sumarle IVA)']], 'true', 'radio') + '</div>' +
+        '<label class="interruptor"><input type="checkbox" name="elegida"> Ya se sabe que es él/ella — marcarlo de una vez como responsable de esta tarea</label>' +
         '<button type="submit" class="btn">Agregar cotización</button></form>');
     } else {
       h.push('<p class="ayuda">Agrega subcontratistas en Más, Subcontratistas, para poder comparar cotizaciones aquí.</p>');
@@ -2557,11 +2606,23 @@
 
   FORM.cotizacion = function (f, d, boton) {
     d.incluyeIva = d.incluyeIva !== 'false';
-    hacer(boton, llamar('apiGuardarCotizacion', d)).then(function (c) {
-      upsert(S.d.cotizaciones, c);
+    // Atajo "marcar de una vez como responsable": el servidor entonces devuelve la lista completa
+    // de cotizaciones de la tarea (como apiElegirCotizacion), no un solo registro — mismo criterio
+    // que ACC.elegirCotizacion, para que las demás cotizaciones de la tarea queden desmarcadas
+    // también en el caché del cliente.
+    var marcarElegida = d.elegida === true || d.elegida === 'true';
+    hacer(boton, llamar('apiGuardarCotizacion', d)).then(function (r) {
+      if (marcarElegida) {
+        S.d.cotizaciones = S.d.cotizaciones.filter(function (c) { return c.tareaId !== d.tareaId; }).concat(r);
+      } else {
+        upsert(S.d.cotizaciones, r);
+      }
+      var t = porId(S.d.tareas, d.tareaId);
+      if (t) delete S.detalles[t.proyectoId];
       S.tareasSub = {};
-      aviso('Cotización agregada');
+      aviso(marcarElegida ? 'Asignado como responsable de la tarea' : 'Cotización agregada');
       if (S.tareaAbierta === d.tareaId) verTarea(d.tareaId);
+      else { cerrarModal(); render(true); }
     }).catch(ignorar);
   };
 
@@ -2591,8 +2652,10 @@
     hacer(el, llamar('apiElegirCotizacion', el.dataset.id)).then(function (lista) {
       var tareaId = lista.length ? lista[0].tareaId : S.tareaAbierta;
       S.d.cotizaciones = S.d.cotizaciones.filter(function (c) { return c.tareaId !== tareaId; }).concat(lista);
+      var t = porId(S.d.tareas, tareaId);
+      if (t) delete S.detalles[t.proyectoId];
       S.tareasSub = {};
-      if (S.tareaAbierta === tareaId) verTarea(tareaId);
+      if (S.tareaAbierta === tareaId) verTarea(tareaId); else render(true);
     }).catch(ignorar);
   };
 
@@ -2605,20 +2668,23 @@
       (t ? '<p class="ayuda" style="margin-top:0">' + esc(textoTratoCotizacion(c)) + '</p>' : '') +
       '<form data-form="pagoCotizacion"><input type="hidden" name="tareaId" value="' + c.tareaId + '">' +
       '<input type="hidden" name="subcontratistaId" value="' + c.subcontratistaId + '">' +
-      campo('% del total acordado (opcional)', input('porcentaje', '', 'inputmode="numeric" placeholder="Ej: 60" data-cambio="pctPagoCotizacion" data-total="' + (t ? t.conIva : 0) + '"')) +
+      campo('% del total acordado (opcional)', input('porcentaje', '', 'inputmode="numeric" placeholder="Ej: 60" data-cambio="pctPago" data-total="' + (t ? t.conIva : 0) + '"')) +
       '<div class="fila-campos">' + campo('Monto', input('monto', '', 'inputmode="numeric" required')) +
       campo('Fecha', input('fecha', S.d.hoy, 'type="date"')) + '</div>' +
       campo('Nota (opcional)', input('nota', '', 'maxlength="300" placeholder="Adelanto, pago parcial…"')) +
-      (t && t.saldo > 0.5 ? '<div class="barra-botones"><button type="button" class="btn btn-chico" data-a="pagarSaldoCotizacion" data-saldo="' + Math.round(t.saldo) + '">Pagar el saldo restante (' + esc(pesos(t.saldo)) + ')</button></div>' : '') +
+      (t && t.saldo > 0.5 ? '<div class="barra-botones"><button type="button" class="btn btn-chico" data-a="pagarSaldo" data-saldo="' + Math.round(t.saldo) + '">Pagar el saldo restante (' + esc(pesos(t.saldo)) + ')</button></div>' : '') +
       botones('Registrar pago') + '</form>');
   };
 
-  ACC.pagarSaldoCotizacion = function (el) {
+  // Compartidos por el pago de una cotización (tarea puntual) y el pago del trato de proyecto
+  // (ACC.pagarSubProyecto, más abajo): en ambos se puede indicar el monto directo o un % del
+  // total acordado, para no tener que sacar la cuenta a mano — pedido explícito de Kevin.
+  ACC.pagarSaldo = function (el) {
     var monto = el.closest('form').querySelector('input[name=monto]');
     if (monto) monto.value = el.dataset.saldo;
   };
 
-  CAMBIO.pctPagoCotizacion = function (el) {
+  CAMBIO.pctPago = function (el) {
     var pct = Number(el.value);
     var total = Number(el.dataset.total);
     if (!pct || !total) return;
@@ -2645,9 +2711,11 @@
     }
     hacer(el, llamar('apiMarcarCotizacionPagada', el.dataset.id)).then(function (r) {
       upsert(S.d.cotizaciones, r);
+      var t2 = porId(S.d.tareas, r.tareaId);
+      if (t2) delete S.detalles[t2.proyectoId];
       S.tareasSub = {};
       aviso('Pago finalizado');
-      if (S.tareaAbierta === r.tareaId) verTarea(r.tareaId);
+      if (S.tareaAbierta === r.tareaId) verTarea(r.tareaId); else render(true);
     }).catch(ignorar);
   };
 
@@ -3407,6 +3475,29 @@
       }
     }).catch(ignorar);
   };
+
+  /**
+   * Asignar un subcontratista directo a una tarea del proyecto, desde la pestaña Subcontratos
+   * (pedido de Kevin: no obligarlo a entrar primero a la tarea para poder asignarlo ahí). Reusa
+   * el mismo formulario/endpoint de cotizaciones (data-form="cotizacion"), con "elegida" fijo en
+   * true: es un atajo para dejarlo de una vez como responsable, no para comparar cotizaciones.
+   * Solo ofrece tareas abiertas (no tiene sentido asignar una ya resuelta o cancelada).
+   */
+  ACC.asignarSubTarea = function (el) {
+    var subId = el.dataset.sub, pid = el.dataset.proyecto;
+    var s = porId(S.d.subcontratistas, subId);
+    var tareas = S.d.tareas.filter(function (t) { return t.proyectoId === pid && t.estado !== 'resuelta' && t.estado !== 'cancelada'; });
+    if (!tareas.length) { aviso('No hay tareas abiertas en este proyecto para asignarle.', { tipo: 'error' }); return; }
+    abrirModal('Asignar a una tarea' + (s ? ': ' + s.nombre : ''),
+      '<form data-form="cotizacion"><input type="hidden" name="subcontratistaId" value="' + subId + '">' +
+      '<input type="hidden" name="elegida" value="true">' +
+      campo('Tarea', selector('tareaId', tareas.map(function (t) { return [t.id, t.titulo]; }), '')) +
+      '<div class="fila-campos">' + campo('Cuánto cobraría', input('monto', '', 'inputmode="numeric" required')) +
+      campo('Nota (opcional)', input('nota', '', 'maxlength="200"')) + '</div>' +
+      '<div class="campo"><span>Ese monto</span>' + chips('incluyeIva', [['true', 'Incluye IVA'], ['false', 'Es neto (falta sumarle IVA)']], 'true', 'radio') + '</div>' +
+      botones('Asignar') + '</form>');
+  };
+
   ACC.quitarSubcontratistaProyecto = function (el) {
     var link = porId(S.d.subcontratistasProyectos, el.dataset.id);
     var msg = '¿Quitar a este subcontratista del proyecto?';
@@ -3462,12 +3553,20 @@
   ACC.pagarSubProyecto = function (el) {
     var subId = el.dataset.sub, pid = el.dataset.proyecto;
     var s = porId(S.d.subcontratistas, subId);
+    // Si ya hay un trato de proyecto pactado (montoTrato), ofrecemos el mismo atajo de "% del
+    // total" que ya existía para pagar una cotización de tarea — pedido de Kevin, para no tener
+    // que sacar la cuenta a mano tampoco acá.
+    var link = S.d.subcontratistasProyectos.filter(function (r) { return r.subcontratistaId === subId && r.proyectoId === pid; })[0];
+    var t = link ? calcTrato(link) : null;
     abrirModal('Registrar pago' + (s ? ': ' + s.nombre : ''), '<form data-form="registrarPago">' +
       '<input type="hidden" name="subcontratistaId" value="' + subId + '">' +
       '<input type="hidden" name="proyectoId" value="' + pid + '">' +
+      (t ? '<p class="ayuda" style="margin-top:0">' + esc(textoTrato(link)) + '</p>' : '') +
+      (t ? campo('% del total acordado (opcional)', input('porcentaje', '', 'inputmode="numeric" placeholder="Ej: 60" data-cambio="pctPago" data-total="' + t.conIva + '"')) : '') +
       '<div class="fila-campos">' + campo('Monto', input('monto', '', 'inputmode="numeric" required')) +
       campo('Fecha', input('fecha', S.d.hoy, 'type="date"')) + '</div>' +
       campo('Nota (opcional)', input('nota', '', 'maxlength="300" placeholder="Adelanto, pago parcial…"')) +
+      (t && t.saldo > 0.5 ? '<div class="barra-botones"><button type="button" class="btn btn-chico" data-a="pagarSaldo" data-saldo="' + Math.round(t.saldo) + '">Pagar el saldo restante (' + esc(pesos(t.saldo)) + ')</button></div>' : '') +
       botones('Registrar pago') + '</form>');
   };
 
@@ -3475,6 +3574,7 @@
     var origenDetalle = !!d._origenDetalle;
     var subId = d.subcontratistaId;
     delete d._origenDetalle;
+    delete d.porcentaje;
     hacer(boton, llamar('apiRegistrarPagoSubcontratista', d)).then(function (r) {
       upsert(S.d.pagosSubcontratistas, r);
       if (r.proyectoId) delete S.detalles[r.proyectoId]; // el gasto real del proyecto incluye los pagos a subcontratistas
