@@ -3948,8 +3948,33 @@
       });
     }
     if (!CLAVE) {
+      // Ronda 6c, parte 4 (v0.12.5) — bug real y más profundo que los de las partes 1-3, encontrado
+      // por Kevin viendo el propio diálogo "Agregar a inicio" de iOS: apenas se linkea manifest.json
+      // (el <link rel="manifest"> del <head>, no el marcador de estilos), iOS deja de usar la URL
+      // actual de la pestaña para el acceso directo que va a crear — usa el "start_url" del manifest
+      // ("./index.html", fijo, sin clave) — así que NINGÚN truco en la URL (ni "?k=", ni "#k=", ni
+      // limpiarla o no) puede llegar nunca al ícono instalado: iOS ni siquiera mira esa URL para armar
+      // el acceso directo una vez que hay manifest de por medio. Es un problema distinto del de
+      // localStorage (parte 1): ese explicaba por qué la clave no viajaba sola; este explica por qué
+      // tampoco viaja la URL en sí. Fix: en vez de seguir peleando con la URL, se pide la clave acá
+      // mismo, una sola vez, dentro de esta misma pestaña/ícono — así se guarda directo en el
+      // `localStorage` de ESTE contexto (el de la pestaña de Safari, o el del ícono si ya se abrió
+      // desde ahí), sin depender de que la URL o el manifest la hayan traído.
       document.getElementById('vista').innerHTML =
-        '<p class="vacio">Enlace no válido. Abre primero el enlace que llegó por correo (para guardar la clave en este teléfono) y vuelve a intentar.</p>';
+        '<div class="vacio">' +
+        '<p>Para entrar la primera vez, escribe la clave de acceso (la que muestra <strong>Obras → Ver enlace vigente</strong>, "Clave para el Atajo de iOS"):</p>' +
+        '<form id="formClaveManual">' +
+        '<label class="campo"><span>Clave de acceso</span>' +
+        '<input id="inputClaveManual" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Pega la clave aquí"></label>' +
+        '<button type="submit" class="btn btn-primario">Entrar</button>' +
+        '</form></div>';
+      document.getElementById('formClaveManual').addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var valor = document.getElementById('inputClaveManual').value.trim();
+        if (!valor) return;
+        try { localStorage.setItem('clave', valor); } catch (e) {}
+        location.reload();
+      });
     } else {
       iniciar();
     }
