@@ -476,38 +476,50 @@
 
   <!--
     Clave del enlace: en Apps Script viene del template del servidor (`<?!= JSON.stringify(clave) ?>`).
-    Acá no hay servidor de por medio, así que se lee de la URL (?k=...) la primera vez y se guarda en
-    este teléfono (localStorage).
+    Acá no hay servidor de por medio, así que se lee de la URL (**#k=...**, en el fragmento, no en
+    "?k=...") la primera vez y se guarda en este teléfono (localStorage).
 
-    Bug real (encontrado por Kevin probando en su iPhone, no un caso hipotético): iOS **no comparte**
-    localStorage entre una pestaña normal de Safari y la misma página abierta como app instalada
-    (standalone) — son dos cajones de guardado separados, aunque sea el mismo sitio. Si acá se sacara
-    la clave de la URL apenas se lee (como se hacía antes), "Compartir → Agregar a pantalla de inicio"
-    guardaría un acceso directo SIN la clave (la URL ya habría quedado limpia para cuando el dedo llega
-    al botón Compartir — el script corre antes de que exista tiempo humano de reacción), y el ícono
-    instalado quedaría mostrando "Enlace no válido" para siempre, sin ninguna forma de arreglarlo desde
-    ahí (tocar el enlace del correo de nuevo solo vuelve a abrir Safari, nunca el ícono instalado).
+    Dos bugs reales, encontrados por Kevin probando de verdad en su iPhone (no casos hipotéticos):
 
-    Por eso la URL **solo** se limpia cuando la página ya se está ejecutando standalone (el ícono
-    instalado: ahí no hay barra de direcciones que mostrar, ni "Agregar a pantalla de inicio" pendiente
-    — esa URL, la que se guardó al crear el ícono, es fija de por vida). En una pestaña normal de
-    Safari se deja la clave a la vista en la URL a propósito, para que el acceso directo que se cree
-    desde ahí la lleve grabada. Contrapartida real: esa pestaña de Safari le queda con la clave en su
-    historial; si eso preocupa, cerrarla (o borrar el historial de Safari) después de crear el ícono, o
-    generar una clave nueva con Obras → Rotar clave si alguna vez se sospecha que alguien más la vio.
+    1) iOS **no comparte** localStorage entre una pestaña normal de Safari y la misma página abierta
+       como app instalada (standalone) — son dos cajones de guardado separados, aunque sea el mismo
+       sitio. Si acá se sacara la clave de la URL apenas se lee, "Compartir → Agregar a pantalla de
+       inicio" guardaría un acceso directo SIN la clave (la URL ya habría quedado limpia para cuando
+       el dedo llega al botón Compartir), y el ícono instalado quedaría mostrando "Enlace no válido"
+       para siempre. Por eso la URL **solo** se limpia cuando la página ya se está ejecutando
+       standalone (ahí no hay barra de direcciones que mostrar, ni "Agregar a pantalla de inicio"
+       pendiente — esa URL es fija de por vida desde que se creó el ícono).
+
+    2) La "Protección de rastreo de enlaces" de iOS (Ajustes → Safari → Avanzado → Protección de
+       seguimiento avanzado) **le borra los parámetros de la URL antes de que la página cargue**
+       cuando el enlace se toca desde Mail, Mensajes o en Navegación privada — no distingue "clave de
+       acceso" de "parámetro de rastreo publicitario", así que un `?k=...` tocado desde el correo
+       puede llegar vacío aunque el correo lo mandara bien. Esta protección actúa sobre el **query
+       string** (lo que va después de `?`), no sobre el **fragmento** (lo que va después de `#`, que
+       ni siquiera viaja a ningún servidor) — por eso la clave ahora viaja en el fragmento (`#k=...`).
+       Se sigue aceptando `?k=...` también, por compatibilidad con un enlace viejo que ya esté
+       circulando, pero un enlace nuevo debe armarse con `#k=...`.
+
+    Contrapartida real de dejar la clave a la vista en la URL en la pestaña de Safari (hasta que se
+    corre standalone): le queda en su historial. Si eso preocupa, cerrar esa pestaña (o borrar el
+    historial de Safari) después de crear el ícono, o generar una clave nueva con Obras → Rotar clave
+    si alguna vez se sospecha que alguien más la vio.
   -->
   <script>
     var CLAVE = (function () {
-      var params = new URLSearchParams(location.search);
-      var k = params.get('k');
+      var hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
+      var queryParams = new URLSearchParams(location.search);
+      var k = hashParams.get('k') || queryParams.get('k');
       var standalone = window.navigator.standalone === true ||
         (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
       if (k) {
         try { localStorage.setItem('clave', k); } catch (e) {}
         if (standalone) {
-          params.delete('k');
-          var resto = params.toString();
-          history.replaceState(null, '', location.pathname + (resto ? '?' + resto : '') + location.hash);
+          hashParams.delete('k');
+          queryParams.delete('k');
+          var restoHash = hashParams.toString();
+          var restoQuery = queryParams.toString();
+          history.replaceState(null, '', location.pathname + (restoQuery ? '?' + restoQuery : '') + (restoHash ? '#' + restoHash : ''));
         }
         return k;
       }
