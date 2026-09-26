@@ -1,0 +1,9 @@
+{
+  "_comentario": "Config web del proyecto Firebase (Ronda 5, tarea #38). Se pega acá tal cual la muestra Firebase (Configuración del proyecto → Tus apps → app web → Config) y no es secreta: Google la diseñó para vivir en el navegador de cualquiera. Después de editar este archivo hay que correr `npm run build:web` de nuevo (regenera web/service-worker.js con esta config adentro). Este archivo en sí NUNCA se pisa solo (igual que config.js): solo se crea la primera vez.",
+  "apiKey": "PEGA_AQUI",
+  "authDomain": "PEGA_AQUI",
+  "projectId": "PEGA_AQUI",
+  "messagingSenderId": "PEGA_AQUI",
+  "appId": "PEGA_AQUI",
+  "vapidKey": "PEGA_AQUI"
+}
