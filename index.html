@@ -1265,6 +1265,7 @@
   function metaTarea(t) {
     var hoy = S.d.hoy;
     var partes = [];
+    if (t.hora) partes.push('<span>' + esc(t.hora) + '</span>');
     var quienes = trabajadoresDe(t.id).map(function (x) { return esc(nombreCorto(x.nombre)); });
     partes.push(quienes.length ? '<span>' + quienes.join(', ') + '</span>' : (abierta(t) ? '<span class="sin">Sin asignar</span>' : ''));
     if (abierta(t) && t.fechaTermino && t.fechaTermino < hoy) {
@@ -2439,6 +2440,11 @@
       campo('Desde', input('fechaInicio', t.fechaInicio, 'type="date" required')) +
       campo('Hasta', input('fechaTermino', t.fechaTermino, 'type="date" required')) +
       '</div>' +
+      '<div class="fila-campos">' +
+      campo('Hora (opcional, si hay que llegar a una hora puntual)', input('hora', t.hora, 'type="time"')) +
+      campo('Avisar antes (minutos, opcional)', input('minutosAntes', t.minutosAntes, 'type="number" min="1" max="1440" placeholder="' + (S.d.config.recordatorioMinutosDefecto || 15) + '"')) +
+      '</div>' +
+      (t.hora ? '' : '<p class="ayuda">Si pones una hora, además del resumen del día se manda un aviso aparte justo antes.</p>') +
       '<div class="campo"><span>Quién</span>' + (trabajadores.length ? chips('trabajadorIds', trabajadores, asignados)
         : '<p class="ayuda">Aún no hay trabajadores. Agrégalos en Más, Trabajadores.</p>') + '</div>' +
       '<div class="campo"><span>Prioridad</span>' + chips('prioridad', [['alta', 'Alta'], ['media', 'Normal'], ['baja', 'Baja']], t.prioridad || 'media', 'radio') + '</div>' +
@@ -2512,9 +2518,11 @@
     }
     var quienes = trabajadoresDe(t.id).map(function (x) { return esc(x.nombre); }).join(', ');
     var rango = t.fechaInicio === t.fechaTermino ? 'Para ' + etiqueta(t.fechaInicio) : 'Desde ' + etiqueta(t.fechaInicio) + ' hasta ' + etiqueta(t.fechaTermino);
+    if (t.hora) rango += ', ' + t.hora;
     var h = [];
     h.push('<p style="margin:0 0 6px"><button class="btn btn-plano btn-chico" style="padding-left:0" data-a="abrirProyecto" data-id="' + p.id + '">' + esc(p.nombre) + '</button></p>');
-    h.push('<p style="margin:4px 0"><strong>' + esc(rango) + '</strong>' + (t.prioridad === 'alta' ? ' <span class="chip chip-rojo">Prioridad alta</span>' : '') + '</p>');
+    h.push('<p style="margin:4px 0"><strong>' + esc(rango) + '</strong>' + (t.prioridad === 'alta' ? ' <span class="chip chip-rojo">Prioridad alta</span>' : '') +
+      (t.hora ? ' <span class="chip chip-azul">Aviso ' + (Number(t.minutosAntes) > 0 ? t.minutosAntes : S.d.config.recordatorioMinutosDefecto) + ' min antes</span>' : '') + '</p>');
     h.push('<p style="margin:4px 0">' + (quienes || '<span style="color:var(--rojo)">Sin asignar</span>') + '</p>');
     if (t.descripcion) h.push('<p style="white-space:pre-wrap">' + esc(t.descripcion) + '</p>');
     h.push('<div class="segmentos">' + [['pendiente', 'Pendiente'], ['en_curso', 'En curso'], ['resuelta', 'Resuelta']].map(function (x) {
@@ -3659,6 +3667,7 @@
       '<div class="fila-campos">' + campo('Inicio', input('inicio', c.inicio, 'type="datetime-local" required')) +
       campo('Fin', input('fin', c.fin, 'type="datetime-local" required')) + '</div>' +
       campo('Lugar (si es distinto a la obra)', input('lugar', c.lugar, 'maxlength="200"')) +
+      campo('Avisar antes (minutos, opcional)', input('minutosAntes', c.minutosAntes, 'type="number" min="1" max="1440" placeholder="' + (S.d.config.recordatorioMinutosDefecto || 15) + '"')) +
       campo('Detalle', area('descripcion', c.descripcion, 'rows="2"')) +
       botones(c.id ? 'Guardar y reenviar invitación' : 'Crear y enviar invitación',
         c.id ? '<button type="button" class="btn btn-peligro" data-a="eliminarCita" data-id="' + c.id + '">Cancelar cita</button>' : '') +
