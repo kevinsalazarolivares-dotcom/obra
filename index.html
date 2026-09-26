@@ -43,6 +43,7 @@
     --c: var(--azul);
     --tabs: 64px;
     --seguro-abajo: env(safe-area-inset-bottom, 0px);
+    --seguro-arriba: env(safe-area-inset-top, 0px);
     --fuente: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     --fuente-titulo: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
@@ -56,6 +57,15 @@
     font: 16px/1.4 var(--fuente);
     font-variant-numeric: tabular-nums;
     min-height: 100dvh;
+    /* Bug real, encontrado por Kevin viendo la PWA ya instalada (standalone) en su iPhone: el
+       encabezado ("Hoy", "Proyectos", etc.) aparecía cortado bajo la barra de estado. La página pide
+       "apple-mobile-web-app-status-bar-style: black-translucent" (para que la barra de estado no deje
+       una franja sólida encima), y eso hace que el contenido se dibuje POR DEBAJO del notch/reloj a
+       menos que se le sume manualmente el alto real de la barra de estado — exactamente lo que ya se
+       hacía abajo (--seguro-abajo) para no tapar el contenido con la barra de pestañas, pero nunca
+       arriba. Solo se nota con el ícono instalado (standalone): en Safari normal, la barra de
+       direcciones ya empuja el contenido hacia abajo, por eso no se veía en las pruebas anteriores. */
+    padding-top: var(--seguro-arriba);
     padding-bottom: calc(var(--tabs) + var(--seguro-abajo) + 24px);
   }
   body.con-modal { overflow: hidden; }
@@ -1151,7 +1161,11 @@
         if (!pushConfigLista_(cfg)) throw new Error('Falta configurar Firebase (ver docs/INSTALACION.md, notificaciones push).');
         if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(cfg);
         pushMensajera_ = firebase.messaging();
-        pushMensajera_.useServiceWorker(registro);
+        // Bug real, encontrado por Kevin probando en su iPhone: `useServiceWorker(registro)` ya no
+        // existe en el SDK de Firebase que se carga acá (firebase-messaging-compat.js 10.14.1) — se
+        // sacó hace varias versiones mayores. El registro del service worker ahora se pasa como
+        // opción directo a getToken() (`serviceWorkerRegistration`), no con un método aparte antes.
+        pushMensajera_._registro = registro; // guardado acá para no volver a registrar el SW
         pushMensajera_._vapidKey = cfg.vapidKey; // guardado acá nomás para no volver a pedir el config
         pushMensajera_.onMessage(function (payload) {
           var n = payload && payload.notification;
@@ -1169,7 +1183,7 @@
       if (permiso !== 'granted') throw new Error('No se activaron: hay que darle permiso de notificaciones a la app en Ajustes.');
       return pushMensajera_lista_();
     }).then(function (m) {
-      return m.getToken({ vapidKey: m._vapidKey });
+      return m.getToken({ vapidKey: m._vapidKey, serviceWorkerRegistration: m._registro });
     }).then(function (token) {
       if (!token) throw new Error('No se pudo generar el token de notificaciones. Intenta de nuevo.');
       return llamar('apiRegistrarTokenPush', token).then(function () {
