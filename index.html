@@ -156,6 +156,9 @@
   .item .lado { font-weight: 600; color: var(--tinta-2); white-space: nowrap; }
   .item .acciones { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .item.proyecto { border-left: 5px solid var(--c); }
+  /* Fila "hija" de otra (ej: cada tarea de un subcontratista sin trato de proyecto, Ronda 8) — mismo
+     look que .item pero con sangría y fondo distinto, para que se lea como parte de la de arriba. */
+  .item.item-anidado { padding-left: 32px; background: var(--superficie-2); }
 
   .vacio { color: var(--tinta-2); padding: 18px 4px; margin: 0; }
   .vacio strong { color: var(--tinta); }
@@ -329,7 +332,15 @@
 
   /* ---------- Carta Gantt ---------- */
   .gantt { display: flex; align-items: flex-start; background: var(--superficie); border-radius: 14px; overflow: hidden; margin: 10px 0; }
-  .gantt-nombres { flex: 0 0 128px; border-right: 1px solid var(--linea); }
+  /* min-width:0 es el fix real (Ronda 8, bug de Kevin: "el texto queda demasiado grande y no veo
+     las fechas" en el iPhone). Sin esto, un título de tarea largo (con white-space:nowrap para
+     poder truncarlo con "…") hace que el navegador calcule el "tamaño mínimo automático" de esta
+     columna a partir del ancho SIN truncar del título más largo, no de los 128px pedidos — y esa
+     columna terminaba comiéndose casi todo el ancho de la carta Gantt, dejando las fechas y las
+     barras apretadas en una franja angosta. Confirmado renderizando la página de verdad (Playwright)
+     antes y después: sin esto la columna de nombres medía ~283px en vez de 128px en un iPhone.
+     min-width:0 le devuelve a flexbox el control real del ancho (128px, como pide flex-basis). */
+  .gantt-nombres { flex: 0 0 128px; min-width: 0; border-right: 1px solid var(--linea); }
   .gantt-cabecera-esp { height: 40px; border-bottom: 1px solid var(--linea); }
   .gantt-fila-nombre { height: 44px; display: flex; align-items: center; gap: 2px; border-top: 1px solid var(--linea); padding-right: 6px; }
   .gantt-nombres .gantt-fila-nombre:first-child { border-top: 0; }
@@ -899,6 +910,18 @@
       .map(function (a) { return porId(S.d.trabajadores, a.trabajadorId); })
       .filter(Boolean);
   }
+  /**
+   * Subcontratista(s) responsable(s) de una tarea (cotización elegida) — distinto de
+   * trabajadoresDe (trabajadores internos, tabla Asignaciones). Se usa para que "Sin asignar" no
+   * aparezca cuando ya hay un subcontratista marcado como responsable, aunque no haya trabajador
+   * interno asignado (Ronda 8, bug real de Kevin: quedaba "Sin asignar" en rojo pese a tener un
+   * subcontratista responsable puesto justo debajo, en Cotizaciones).
+   */
+  function responsablesDe(tareaId) {
+    return S.d.cotizaciones.filter(function (c) { return c.tareaId === tareaId && c.elegida; })
+      .map(function (c) { return porId(S.d.subcontratistas, c.subcontratistaId); })
+      .filter(Boolean);
+  }
   function nombreCorto(n) { return String(n || '').split(/\s+/)[0]; }
 
   var COLORES = ['#1f4e8c', '#2f7d4f', '#9a4b12', '#6b3f8c', '#17707f', '#8c1f4e', '#5b6a12', '#3f4b8c'];
@@ -1266,7 +1289,10 @@
     var hoy = S.d.hoy;
     var partes = [];
     if (t.hora) partes.push('<span>' + esc(t.hora) + '</span>');
-    var quienes = trabajadoresDe(t.id).map(function (x) { return esc(nombreCorto(x.nombre)); });
+    // Ronda 8: un subcontratista responsable (cotización elegida) también cuenta como "asignado",
+    // igual que en verTarea — ver responsablesDe en App.html.
+    var quienes = trabajadoresDe(t.id).map(function (x) { return esc(nombreCorto(x.nombre)); })
+      .concat(responsablesDe(t.id).map(function (s) { return esc(nombreCorto(s.nombre)); }));
     partes.push(quienes.length ? '<span>' + quienes.join(', ') + '</span>' : (abierta(t) ? '<span class="sin">Sin asignar</span>' : ''));
     if (abierta(t) && t.fechaTermino && t.fechaTermino < hoy) {
       partes.push('<span class="vence">Vencía ' + esc(etiqueta(t.fechaTermino)) + '</span>');
@@ -1476,9 +1502,23 @@
     var atrasadas = tareas.filter(function (t) { return t.fechaTermino && t.fechaTermino < S.d.hoy; }).length;
     var detalle = [p.cliente, p.direccion].filter(Boolean).map(esc).join(', ');
     var estado = p.estado === 'activo' ? '' : ' <span class="chip">' + (p.estado === 'pausado' ? 'Pausado' : 'Terminado') + '</span>';
+    // Ronda 8 (pedido de Kevin: "me gustaría ver la fecha de inicio... y término... además el
+    // avance" en esta misma lista, sin tener que entrar a cada proyecto): fechas del proyecto
+    // (p.fechaInicio/p.fechaTermino ya vienen tal cual en el bootstrap, no hace falta pedir nada
+    // aparte) y % de avance de tareas resueltas, usando avanceProyectos del bootstrap (igual que
+    // la barra de "Avance" de arriba de las pestañas, pero sin depender del detalle del proyecto,
+    // que solo se pide de a uno cuando se entra).
+    var fechas = p.fechaInicio || p.fechaTermino
+      ? (p.fechaInicio ? 'Desde ' + corta(p.fechaInicio) : '') + (p.fechaInicio && p.fechaTermino ? ' hasta ' : (p.fechaTermino ? 'Hasta ' : '')) + (p.fechaTermino ? corta(p.fechaTermino) : '')
+      : '';
+    var avance = S.d.avanceProyectos && S.d.avanceProyectos[p.id];
+    var avancePct = avance && avance.total ? Math.round((avance.resueltas / avance.total) * 100) : null;
     return '<button class="item proyecto" style="--c:' + colorProyecto(p.id) + '" data-a="abrirProyecto" data-id="' + p.id + '">' +
       '<span class="principal"><span class="nombre">' + esc(p.nombre) + estado + '</span>' +
-      (detalle ? '<span class="detalle">' + detalle + '</span>' : '') + '</span>' +
+      (detalle ? '<span class="detalle">' + detalle + '</span>' : '') +
+      (fechas ? '<span class="detalle">' + esc(fechas) + '</span>' : '') +
+      (avancePct !== null ? '<div class="barra-avance" style="margin:6px 0 2px"><div class="barra-avance-rellena" style="width:' + avancePct + '%"></div></div>' +
+        '<span class="detalle">Avance ' + avancePct + '% <span class="resumen-chico">(' + avance.resueltas + ' de ' + avance.total + ' tareas)</span></span>' : '') + '</span>' +
       '<span class="lado">' + tareas.length + ' abierta' + (tareas.length === 1 ? '' : 's') +
       (atrasadas ? '<br><span class="chip chip-rojo">' + atrasadas + ' atrasada' + (atrasadas === 1 ? '' : 's') + '</span>' : '') +
       '</span></button>';
@@ -1753,6 +1793,27 @@
     return acordado + ' · pagado ' + pesos(t.pagado) + ' (' + t.pct + '%) · ' + saldoTxt;
   }
 
+  /**
+   * Fila "hija" con una tarea puntual de un subcontratista sin trato de proyecto (pestaña
+   * Subcontratos, Ronda 8): título de la tarea (abre verTarea), estado de pago/saldo (mismo texto
+   * que en la propia tarea) y los mismos botones Pagar/Finalizar pago/Editar, para no obligar a
+   * abrir la tarea solo para ver o registrar un pago.
+   */
+  function filaCotizacionTarea(x) {
+    var c = x.cotizacion, t = x.tarea;
+    var acciones = c.pagado
+      ? '<span class="chip chip-verde">Pago finalizado</span>'
+      : '<button class="btn btn-chico" data-a="pagarCotizacion" data-id="' + c.id + '">Pagar</button>' +
+        '<button class="btn btn-chico btn-plano" data-a="finalizarPagoCotizacion" data-id="' + c.id + '">Finalizar pago</button>';
+    var titulo = t
+      ? '<button class="btn btn-plano btn-chico" style="padding:0;font-weight:600" data-a="verTarea" data-id="' + t.id + '">' + esc(t.titulo) + '</button>'
+      : 'Tarea eliminada';
+    return '<div class="item item-anidado"><span class="principal"><span class="nombre">' + titulo + '</span>' +
+      '<span class="detalle">' + esc(textoTratoCotizacion(c)) + '</span></span>' +
+      '<span class="acciones">' + acciones +
+      '<button class="btn btn-chico btn-plano" data-a="editarCotizacion" data-id="' + c.id + '" aria-label="Editar">Editar</button></span></div>';
+  }
+
   /** Línea "N tareas en este proyecto (título, título…)" a partir de cotizacionesElegidas de detalle_. */
   function resumenTareasSub(lista) {
     if (!lista || !lista.length) return '';
@@ -1805,9 +1866,15 @@
         '<button class="btn btn-chico btn-plano" data-a="quitarSubcontratistaProyecto" data-id="' + r.id + '" aria-label="Quitar">✕</button></span></div>';
     }).join('') + soloPorTareas.map(function (subId) {
       var s = porId(S.d.subcontratistas, subId);
-      return '<div class="item"><span class="principal"><span class="nombre">' + esc(s ? s.nombre : 'Subcontratista eliminado') + '</span>' +
+      // Ronda 8 (pedido de Kevin): antes esto resumía todas las tareas en una sola línea, sin poder
+      // ver ni pagar desde acá — ahora cada tarea de este subcontratista aparece como su propia fila,
+      // con el mismo estado de pago/saldo y los mismos botones Pagar/Finalizar/Editar que tiene desde
+      // la propia tarea (verTarea), para no tener que ir a buscarla aparte solo para eso.
+      var cabecera = '<div class="item"><span class="principal"><span class="nombre">' + esc(s ? s.nombre : 'Subcontratista eliminado') + '</span>' +
         '<span class="detalle">' + esc(resumenTareasSub(porSub[subId])) + ' — sin trato de proyecto pactado</span></span>' +
         '<span class="acciones"><button class="btn btn-chico" data-a="asignarSubTarea" data-sub="' + subId + '" data-proyecto="' + p.id + '">A otra tarea</button></span></div>';
+      var filas = (porSub[subId] || []).map(function (x) { return filaCotizacionTarea(x); }).join('');
+      return cabecera + filas;
     }).join('') + '</div>');
     return h.join('');
   };
@@ -2516,7 +2583,12 @@
         if (S.tareaAbierta === id && !$('#modal').hidden) verTarea(id);
       }).catch(function (e) { aviso(e.message, { tipo: 'error' }); });
     }
-    var quienes = trabajadoresDe(t.id).map(function (x) { return esc(x.nombre); }).join(', ');
+    // Ronda 8: "Sin asignar" también debe considerar a un subcontratista responsable (cotización
+    // elegida), no solo trabajadores internos — si no, quedaba en rojo "Sin asignar" aunque más
+    // abajo, en Cotizaciones, ya hubiera alguien marcado "Responsable" (bug real de Kevin).
+    var quienes = trabajadoresDe(t.id).map(function (x) { return esc(x.nombre); })
+      .concat(responsablesDe(t.id).map(function (s) { return esc(s.nombre) + ' (subcontratista)'; }))
+      .join(', ');
     var rango = t.fechaInicio === t.fechaTermino ? 'Para ' + etiqueta(t.fechaInicio) : 'Desde ' + etiqueta(t.fechaInicio) + ' hasta ' + etiqueta(t.fechaTermino);
     if (t.hora) rango += ', ' + t.hora;
     var h = [];
@@ -2554,20 +2626,14 @@
           '<span class="detalle">' + esc(lineas) + '</span>' +
           (c.elegida ? '<span class="detalle">' + esc(textoTratoCotizacion(c)) + '</span>' : '') + '</span>' +
           '<span class="acciones">' + acciones +
+          '<button class="btn btn-chico btn-plano" data-a="editarCotizacion" data-id="' + c.id + '" aria-label="Editar">Editar</button>' +
           '<button class="btn btn-chico btn-plano" data-a="eliminarCotizacion" data-id="' + c.id + '" aria-label="Eliminar">✕</button></span></div>';
       }).join('') + '</div>');
     } else {
       h.push(vacio('Aún no tienes cotizaciones para esta tarea. Anota cuánto cobraría cada subcontratista para comparar.'));
     }
     if (S.d.subcontratistas.length) {
-      h.push('<form data-form="cotizacion"><input type="hidden" name="tareaId" value="' + t.id + '">' +
-        campo('Subcontratista', selector('subcontratistaId', S.d.subcontratistas.filter(function (s) { return s.activo; })
-          .map(function (s) { return [s.id, s.nombre + ' (' + s.especialidad + ')']; }), '')) +
-        '<div class="fila-campos">' + campo('Cuánto cobraría', input('monto', '', 'inputmode="numeric" required')) +
-        campo('Nota (opcional)', input('nota', '', 'maxlength="200"')) + '</div>' +
-        '<div class="campo"><span>Ese monto</span>' + chips('incluyeIva', [['true', 'Incluye IVA'], ['false', 'Es neto (falta sumarle IVA)']], 'true', 'radio') + '</div>' +
-        '<label class="interruptor"><input type="checkbox" name="elegida"> Ya se sabe que es él/ella — marcarlo de una vez como responsable de esta tarea</label>' +
-        '<button type="submit" class="btn">Agregar cotización</button></form>');
+      h.push(formCotizacion(t.id, null));
     } else {
       h.push('<p class="ayuda">Agrega subcontratistas en Más, Subcontratistas, para poder comparar cotizaciones aquí.</p>');
     }
@@ -2638,23 +2704,63 @@
   // Cotizaciones de subcontratistas (por tarea)
   // =====================================================================
 
+  /**
+   * Formulario para agregar (c=null) o editar (c=cotización existente) una cotización. Editar
+   * permite corregir cualquier campo, incluido el subcontratista (Ronda 8: "si me equivoco de
+   * contratista tampoco puedo cambiarlo" — antes solo se podía agregar una cotización nueva del
+   * subcontratista correcto y elegirla aparte). El atajo "marcarlo de una vez como responsable"
+   * solo tiene sentido al agregar una cotización nueva, no al editar una ya existente.
+   */
+  function formCotizacion(tareaId, c) {
+    c = c || null;
+    return '<form data-form="cotizacion">' +
+      (c ? '<input type="hidden" name="id" value="' + c.id + '">' : '') +
+      '<input type="hidden" name="tareaId" value="' + tareaId + '">' +
+      campo('Subcontratista', selector('subcontratistaId', S.d.subcontratistas.filter(function (s) { return s.activo || (c && s.id === c.subcontratistaId); })
+        .map(function (s) { return [s.id, s.nombre + ' (' + s.especialidad + ')']; }), c ? c.subcontratistaId : '')) +
+      '<div class="fila-campos">' + campo('Cuánto cobraría', input('monto', c ? c.monto : '', 'inputmode="numeric" required')) +
+      campo('Nota (opcional)', input('nota', c ? c.nota : '', 'maxlength="200"')) + '</div>' +
+      '<div class="campo"><span>Ese monto</span>' + chips('incluyeIva', [['true', 'Incluye IVA'], ['false', 'Es neto (falta sumarle IVA)']], c ? String(c.incluyeIva !== false) : 'true', 'radio') + '</div>' +
+      (c ? '' : '<label class="interruptor"><input type="checkbox" name="elegida"> Ya se sabe que es él/ella — marcarlo de una vez como responsable de esta tarea</label>') +
+      botones(c ? 'Guardar cambios' : 'Agregar cotización') + '</form>';
+  }
+
+  ACC.editarCotizacion = function (el) {
+    var c = porId(S.d.cotizaciones, el.dataset.id);
+    if (!c) return;
+    abrirModal('Editar cotización', formCotizacion(c.tareaId, c));
+  };
+
   FORM.cotizacion = function (f, d, boton) {
     d.incluyeIva = d.incluyeIva !== 'false';
-    // Atajo "marcar de una vez como responsable": el servidor entonces devuelve la lista completa
-    // de cotizaciones de la tarea (como apiElegirCotizacion), no un solo registro — mismo criterio
-    // que ACC.elegirCotizacion, para que las demás cotizaciones de la tarea queden desmarcadas
-    // también en el caché del cliente.
-    var marcarElegida = d.elegida === true || d.elegida === 'true';
+    var editando = !!d.id;
+    var anterior = editando ? porId(S.d.cotizaciones, d.id) : null;
+    // Atajo "marcar de una vez como responsable" (solo al agregar): el servidor entonces devuelve
+    // la lista completa de cotizaciones de la tarea (como apiElegirCotizacion), no un solo
+    // registro — mismo criterio que ACC.elegirCotizacion, para que las demás cotizaciones de la
+    // tarea queden desmarcadas también en el caché del cliente.
+    var marcarElegida = !editando && (d.elegida === true || d.elegida === 'true');
     hacer(boton, llamar('apiGuardarCotizacion', d)).then(function (r) {
       if (marcarElegida) {
         S.d.cotizaciones = S.d.cotizaciones.filter(function (c) { return c.tareaId !== d.tareaId; }).concat(r);
       } else {
         upsert(S.d.cotizaciones, r);
       }
+      // Si se editó y se corrigió el subcontratista, cualquier pago que ya se le hubiera
+      // registrado (por esta tarea) al subcontratista anterior se actualiza también en el caché
+      // local, para que quede coherente de inmediato — el servidor ya hizo lo mismo de verdad
+      // (ver Cotizaciones.guardar_ en Tareas.js), esto solo evita tener que recargar para verlo.
+      if (editando && anterior && anterior.subcontratistaId !== d.subcontratistaId) {
+        S.d.pagosSubcontratistas.forEach(function (pago) {
+          if (pago.tareaId === d.tareaId && pago.subcontratistaId === anterior.subcontratistaId) {
+            pago.subcontratistaId = d.subcontratistaId;
+          }
+        });
+      }
       var t = porId(S.d.tareas, d.tareaId);
       if (t) delete S.detalles[t.proyectoId];
       S.tareasSub = {};
-      aviso(marcarElegida ? 'Asignado como responsable de la tarea' : 'Cotización agregada');
+      aviso(marcarElegida ? 'Asignado como responsable de la tarea' : (editando ? 'Cotización actualizada' : 'Cotización agregada'));
       if (S.tareaAbierta === d.tareaId) verTarea(d.tareaId);
       else { cerrarModal(); render(true); }
     }).catch(ignorar);
