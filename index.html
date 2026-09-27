@@ -889,6 +889,36 @@
     return String(r).replace('.', ',');
   }
 
+  // Ronda 11 (pedido de Kevin: "difícil saber si puse los 0 suficientes para representar
+  // 1.500.000"): puntos de miles EN VIVO mientras se escribe un monto, no solo al mostrarlo ya
+  // guardado (eso ya lo hacía pesos() de arriba). Se aplica a los campos de plata en pesos
+  // marcados con data-formato="miles" (ver inputMonto() en Formularios.html) — montos enteros,
+  // sin decimales; no se usa en Cantidad/Precio unitario/Total del itemizado de compras (esos
+  // pueden traer decimales de la IA y mezclar coma decimal con punto de miles en vivo es más
+  // riesgoso de lo que vale la pena por ahora).
+  function formatearMiles(valor) {
+    var digitos = String(valor === null || valor === undefined ? '' : valor).replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '');
+    return digitos.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  }
+
+  // Reformatea en vivo conservando la posición del cursor (contando cuántos dígitos había antes
+  // de él y recolocándolo tras esa misma cantidad de dígitos en el texto ya formateado) — sin
+  // esto, cada tecla mandaría el cursor al final y sería imposible corregir un número a mitad.
+  function formatearMilesEnVivo(el) {
+    var anterior = el.value;
+    var cursor = el.selectionStart === null || el.selectionStart === undefined ? anterior.length : el.selectionStart;
+    var digitosAntes = anterior.slice(0, cursor).replace(/[^\d]/g, '').length;
+    var formateado = formatearMiles(anterior);
+    if (formateado === anterior) return;
+    el.value = formateado;
+    var pos = 0, vistos = 0;
+    while (pos < formateado.length && vistos < digitosAntes) {
+      if (/\d/.test(formateado.charAt(pos))) vistos++;
+      pos++;
+    }
+    el.setSelectionRange(pos, pos);
+  }
+
   function porId(lista, id) {
     for (var i = 0; i < (lista || []).length; i++) if (lista[i].id === id) return lista[i];
     return null;
@@ -1003,6 +1033,14 @@
   document.addEventListener('change', function (e) {
     var el = e.target.closest('[data-cambio]');
     if (el && CAMBIO[el.dataset.cambio]) CAMBIO[el.dataset.cambio](el, e);
+  });
+
+  // Ronda 11: puntos de miles en vivo en los campos de plata (data-formato="miles") — en "input",
+  // no en "change", para que se vea reformateado de inmediato mientras se escribe, no solo al
+  // salir del campo.
+  document.addEventListener('input', function (e) {
+    var el = e.target;
+    if (el.dataset && el.dataset.formato === 'miles') formatearMilesEnVivo(el);
   });
 
   document.addEventListener('keydown', function (e) {
@@ -1787,7 +1825,10 @@
   /** Línea de texto con el trato de una cotización elegida (monto, IVA, pagado y saldo). */
   function textoTratoCotizacion(cot) {
     var t = calcTratoCotizacion(cot);
-    if (!t) return '';
+    // Ronda 10: una cotización en 0 (el subcontratista hace esta tarea pero el cobro real está
+    // cargado en otra) no tiene trato que mostrar — antes esto quedaba en blanco (un espacio vacío
+    // con estilo, en el listado); ahora se deja explícito para que no parezca un dato faltante.
+    if (!t) return 'Sin cobro aparte por esta tarea';
     var acordado = cot.incluyeIva ? 'Acordado ' + pesos(t.conIva) + ' (incluye IVA)' : 'Acordado ' + pesos(t.neto) + ' + IVA = ' + pesos(t.conIva);
     var saldoTxt = t.saldo > 0.5 ? 'saldo ' + pesos(t.saldo) : (t.saldo < -0.5 ? 'pagado de más ' + pesos(-t.saldo) : 'sin saldo');
     return acordado + ' · pagado ' + pesos(t.pagado) + ' (' + t.pct + '%) · ' + saldoTxt;
@@ -2404,6 +2445,15 @@
   function input(nombre, valor, extra) {
     return '<input name="' + nombre + '" value="' + esc(valor === null || valor === undefined ? '' : valor) + '" ' + (extra || '') + '>';
   }
+  // Ronda 11 (pedido de Kevin: "difícil saber si puse los 0 suficientes para representar
+  // 1.500.000"): como input(), pero para un monto en pesos — el valor inicial ya se muestra con
+  // puntos de miles (ej. editar una cotización de $1.500.000 no muestra "1500000") y el campo
+  // queda marcado data-formato="miles" para que formatearMilesEnVivo (App.html) lo siga
+  // reformateando en cada tecla. El servidor ya sabe leer ese formato (LibValidacion.aNumero).
+  function inputMonto(nombre, valor, extra) {
+    var inicial = (valor === null || valor === undefined || valor === '') ? '' : formatearMiles(valor);
+    return input(nombre, inicial, 'data-formato="miles" ' + (extra || ''));
+  }
   function area(nombre, valor, extra) {
     return '<textarea name="' + nombre + '" ' + (extra || '') + '>' + esc(valor || '') + '</textarea>';
   }
@@ -2450,7 +2500,7 @@
       '</div>' +
       '<div class="campo"><span>Días que se trabaja</span>' + chips('diasLaborables', DIAS_SEMANA, String(p.diasLaborables || '').split(',')) + '</div>' +
       campo('Estado', selector('estado', [['activo', 'Activo'], ['pausado', 'Pausado'], ['terminado', 'Terminado']], p.estado)) +
-      campo('Presupuesto total (opcional)', input('presupuestoTotal', p.presupuestoTotal, 'inputmode="numeric"')) +
+      campo('Presupuesto total (opcional)', inputMonto('presupuestoTotal', p.presupuestoTotal, 'inputmode="numeric"')) +
       '<label class="interruptor"><input type="checkbox" name="invitarTareas"' + (p.invitarTareas ? ' checked' : '') + '> Enviar cada tarea como invitación a mi calendario</label>' +
       campo('Notas', area('notas', p.notas, 'rows="3"')) +
       botones(p.id ? 'Guardar cambios' : 'Crear proyecto') +
@@ -2610,7 +2660,9 @@
       h.push('<div class="lista">' + cotizaciones.map(function (c) {
         var sc = porId(S.d.subcontratistas, c.subcontratistaId);
         var nProy = S.d.subcontratistasProyectos.filter(function (r) { return r.subcontratistaId === c.subcontratistaId; }).length;
-        var montoTxt = pesos(c.monto) + (c.incluyeIva ? ' (incluye IVA)' : ' + IVA');
+        // Ronda 10: una cotización en 0 (tarea del mismo subcontratista sin cobro aparte, ver
+        // formCotizacion) no debe mostrarse como "$0 (incluye IVA)" — se deja explícito.
+        var montoTxt = Number(c.monto) ? pesos(c.monto) + (c.incluyeIva ? ' (incluye IVA)' : ' + IVA') : 'Sin cobro aparte';
         var lineas = [montoTxt, nProy ? nProy + ' proyecto' + (nProy === 1 ? '' : 's') + ' juntos' : '', c.nota].filter(Boolean).join(' — ');
         var acciones;
         if (c.elegida) {
@@ -2713,17 +2765,42 @@
    */
   function formCotizacion(tareaId, c) {
     c = c || null;
+    // Ronda 10 (pedido de Kevin: "tengo 2-3 tareas que las realiza el subcontrato y solo a 1 le
+    // asigno el valor que cobro, las otras quiero asignarlas como 0... sin necesidad de estar
+    // dividiendo el valor"): checkbox "no cobra aparte" que deja el monto en 0 de un toque, en vez
+    // de tener que escribir 0 a mano (y repartir el cobro real entre las tareas ya no es necesario).
+    var sinCobro = !!(c && !Number(c.monto));
     return '<form data-form="cotizacion">' +
       (c ? '<input type="hidden" name="id" value="' + c.id + '">' : '') +
       '<input type="hidden" name="tareaId" value="' + tareaId + '">' +
       campo('Subcontratista', selector('subcontratistaId', S.d.subcontratistas.filter(function (s) { return s.activo || (c && s.id === c.subcontratistaId); })
         .map(function (s) { return [s.id, s.nombre + ' (' + s.especialidad + ')']; }), c ? c.subcontratistaId : '')) +
-      '<div class="fila-campos">' + campo('Cuánto cobraría', input('monto', c ? c.monto : '', 'inputmode="numeric" required')) +
+      '<div class="fila-campos">' + campo('Cuánto cobraría', inputMonto('monto', c ? c.monto : '', 'inputmode="numeric" required' + (sinCobro ? ' readonly' : ''))) +
       campo('Nota (opcional)', input('nota', c ? c.nota : '', 'maxlength="200"')) + '</div>' +
+      '<label class="interruptor"><input type="checkbox" name="sinCobro" data-cambio="sinCobroCotizacion"' + (sinCobro ? ' checked' : '') +
+      '> No cobra aparte por esta tarea (ya cobra en otra) — deja el monto en $0</label>' +
       '<div class="campo"><span>Ese monto</span>' + chips('incluyeIva', [['true', 'Incluye IVA'], ['false', 'Es neto (falta sumarle IVA)']], c ? String(c.incluyeIva !== false) : 'true', 'radio') + '</div>' +
       (c ? '' : '<label class="interruptor"><input type="checkbox" name="elegida"> Ya se sabe que es él/ella — marcarlo de una vez como responsable de esta tarea</label>') +
       botones(c ? 'Guardar cambios' : 'Agregar cotización') + '</form>';
   }
+
+  // Ronda 10: al marcar/desmarcar "no cobra aparte" en formCotizacion, fija (o libera) el campo
+  // monto en $0 sin que Kevin tenga que borrar y escribir nada a mano. Si se destilda, recupera lo
+  // que había escrito antes (guardado en data-anterior) en vez de dejarlo vacío.
+  CAMBIO.sinCobroCotizacion = function (el) {
+    var form = el.closest('form');
+    var monto = form && form.querySelector('input[name=monto]');
+    if (!monto) return;
+    if (el.checked) {
+      monto.dataset.anterior = monto.value;
+      monto.value = '0';
+      monto.readOnly = true;
+    } else {
+      monto.readOnly = false;
+      monto.value = monto.dataset.anterior || '';
+      delete monto.dataset.anterior;
+    }
+  };
 
   ACC.editarCotizacion = function (el) {
     var c = porId(S.d.cotizaciones, el.dataset.id);
@@ -2732,6 +2809,7 @@
   };
 
   FORM.cotizacion = function (f, d, boton) {
+    delete d.sinCobro; // solo UI (ver CAMBIO.sinCobroCotizacion) — el servidor solo necesita el monto ya en 0
     d.incluyeIva = d.incluyeIva !== 'false';
     var editando = !!d.id;
     var anterior = editando ? porId(S.d.cotizaciones, d.id) : null;
@@ -2809,7 +2887,7 @@
       '<form data-form="pagoCotizacion"><input type="hidden" name="tareaId" value="' + c.tareaId + '">' +
       '<input type="hidden" name="subcontratistaId" value="' + c.subcontratistaId + '">' +
       campo('% del total acordado (opcional)', input('porcentaje', '', 'inputmode="numeric" placeholder="Ej: 60" data-cambio="pctPago" data-total="' + (t ? t.conIva : 0) + '"')) +
-      '<div class="fila-campos">' + campo('Monto', input('monto', '', 'inputmode="numeric" required')) +
+      '<div class="fila-campos">' + campo('Monto', inputMonto('monto', '', 'inputmode="numeric" required')) +
       campo('Fecha', input('fecha', S.d.hoy, 'type="date"')) + '</div>' +
       campo('Nota (opcional)', input('nota', '', 'maxlength="300" placeholder="Adelanto, pago parcial…"')) +
       (t && t.saldo > 0.5 ? '<div class="barra-botones"><button type="button" class="btn btn-chico" data-a="pagarSaldo" data-saldo="' + Math.round(t.saldo) + '">Pagar el saldo restante (' + esc(pesos(t.saldo)) + ')</button></div>' : '') +
@@ -2818,10 +2896,12 @@
 
   // Compartidos por el pago de una cotización (tarea puntual) y el pago del trato de proyecto
   // (ACC.pagarSubProyecto, más abajo): en ambos se puede indicar el monto directo o un % del
-  // total acordado, para no tener que sacar la cuenta a mano — pedido explícito de Kevin.
+  // total acordado, para no tener que sacar la cuenta a mano — pedido explícito de Kevin. Ambos
+  // fijan el campo por código (no por tecleo), así que no dispara el evento "input" que reformatea
+  // en vivo (Ronda 11) — se formatea a mano con formatearMiles() antes de asignarlo.
   ACC.pagarSaldo = function (el) {
     var monto = el.closest('form').querySelector('input[name=monto]');
-    if (monto) monto.value = el.dataset.saldo;
+    if (monto) monto.value = formatearMiles(el.dataset.saldo);
   };
 
   CAMBIO.pctPago = function (el) {
@@ -2829,7 +2909,7 @@
     var total = Number(el.dataset.total);
     if (!pct || !total) return;
     var monto = el.closest('form').querySelector('input[name=monto]');
-    if (monto) monto.value = Math.round(total * pct / 100);
+    if (monto) monto.value = formatearMiles(Math.round(total * pct / 100));
   };
 
   FORM.pagoCotizacion = function (f, d, boton) {
@@ -2965,7 +3045,7 @@
       '<div class="fila-campos">' + campo('Cantidad', input('cantidad', c.cantidad, 'inputmode="decimal"')) + campo('Unidad', input('unidad', c.unidad, 'placeholder="galón, saco, m"')) + '</div>' +
       '<div class="campo"><span>Tipo</span>' + chips('tipo', [['material', 'Material de construcción'], ['herramienta', 'Herramienta']], c.tipo || 'material', 'radio') + '</div>' +
       '<p class="ayuda">Una herramienta comprada queda guardada en el catálogo para usarla en otros proyectos. Los materiales quedan solo en este proyecto.</p>' +
-      (c.id ? '<div class="fila-campos">' + campo('Monto en pesos (opcional)', input('montoClp', c.montoClp, 'inputmode="numeric"')) +
+      (c.id ? '<div class="fila-campos">' + campo('Monto en pesos (opcional)', inputMonto('montoClp', c.montoClp, 'inputmode="numeric"')) +
         campo('Dónde (opcional)', input('proveedor', c.proveedor, 'maxlength="120"')) + '</div>'
         : '<div class="campo"><span>Estado</span>' + chips('estado', [['aprobada', 'Por comprar'], ['sugerida', 'Solo sugerencia'], ['comprada', 'Ya la compré']], 'aprobada', 'radio') + '</div>') +
       botones(c.id ? 'Guardar cambios' : 'Guardar compra', c.id ? '<button type="button" class="btn btn-peligro" data-a="eliminarCompra" data-id="' + c.id + '">Eliminar</button>' : '') +
@@ -3017,7 +3097,7 @@
     var c = porId(S.d.compras, el.dataset.id);
     abrirModal('Marcar comprada', '<p style="margin-top:0"><strong>' + esc(c.descripcion) + '</strong></p><form data-form="comprada">' +
       '<input type="hidden" name="id" value="' + c.id + '">' +
-      campo('Monto en pesos (opcional)', input('montoClp', c.montoClp, 'inputmode="numeric"')) +
+      campo('Monto en pesos (opcional)', inputMonto('montoClp', c.montoClp, 'inputmode="numeric"')) +
       campo('Dónde (opcional)', input('proveedor', c.proveedor, 'maxlength="120"')) +
       campo('Foto de la boleta (opcional)', '<input type="file" name="boleta" accept="image/*,application/pdf">') +
       campo('Fecha de vencimiento del pago (opcional)', input('vencePago', '', 'type="date"')) +
@@ -3579,7 +3659,7 @@
     h.push('<form data-form="registrarPago"><input type="hidden" name="subcontratistaId" value="' + id + '">' +
       '<input type="hidden" name="_origenDetalle" value="1">' +
       campo('Proyecto (opcional)', selector('proyectoId', opcionesProyectos(true, 'Sin proyecto'), '')) +
-      '<div class="fila-campos">' + campo('Monto', input('monto', '', 'inputmode="numeric" required')) +
+      '<div class="fila-campos">' + campo('Monto', inputMonto('monto', '', 'inputmode="numeric" required')) +
       campo('Fecha', input('fecha', S.d.hoy, 'type="date"')) + '</div>' +
       campo('Nota (opcional)', input('nota', '', 'maxlength="300" placeholder="Adelanto, pago parcial…"')) +
       '<button type="submit" class="btn btn-primario">Registrar pago</button></form>');
@@ -3632,8 +3712,13 @@
       '<form data-form="cotizacion"><input type="hidden" name="subcontratistaId" value="' + subId + '">' +
       '<input type="hidden" name="elegida" value="true">' +
       campo('Tarea', selector('tareaId', tareas.map(function (t) { return [t.id, t.titulo]; }), '')) +
-      '<div class="fila-campos">' + campo('Cuánto cobraría', input('monto', '', 'inputmode="numeric" required')) +
+      '<div class="fila-campos">' + campo('Cuánto cobraría', inputMonto('monto', '', 'inputmode="numeric" required')) +
       campo('Nota (opcional)', input('nota', '', 'maxlength="200"')) + '</div>' +
+      // Ronda 11 (antes solo estaba en formCotizacion): este formulario es una copia aparte, no
+      // reusa formCotizacion (necesita el selector de Tarea, que formCotizacion no tiene, porque
+      // ahí la tarea ya viene fija), así que el checkbox "no cobra aparte" se agrega también acá
+      // a mano para que el mismo atajo funcione asignando otra tarea directo desde Subcontratos.
+      '<label class="interruptor"><input type="checkbox" name="sinCobro" data-cambio="sinCobroCotizacion"> No cobra aparte por esta tarea (ya cobra en otra) — deja el monto en $0</label>' +
       '<div class="campo"><span>Ese monto</span>' + chips('incluyeIva', [['true', 'Incluye IVA'], ['false', 'Es neto (falta sumarle IVA)']], 'true', 'radio') + '</div>' +
       botones('Asignar') + '</form>');
   };
@@ -3672,7 +3757,7 @@
       '<form data-form="trato"><input type="hidden" name="subcontratistaId" value="' + link.subcontratistaId + '">' +
       '<input type="hidden" name="proyectoId" value="' + link.proyectoId + '">' +
       '<input type="hidden" name="nota" value="' + esc(link.nota || '') + '">' +
-      campo('Monto acordado (el total que te dijo)', input('montoTrato', link.montoTrato, 'inputmode="numeric" placeholder="Déjalo vacío si aún no hay trato"')) +
+      campo('Monto acordado (el total que te dijo)', inputMonto('montoTrato', link.montoTrato, 'inputmode="numeric" placeholder="Déjalo vacío si aún no hay trato"')) +
       '<div class="campo"><span>Ese monto</span>' + chips('incluyeIva', [['true', 'Incluye IVA'], ['false', 'Es neto (falta sumarle IVA)']], incluyeIva, 'radio') + '</div>' +
       '<p class="ayuda">El IVA en Chile es ' + (S.d.config.ivaTasa || 19) + '%. Con el trato guardado, cada pago que registres va mostrando cuánto llevas pagado y cuánto saldo queda.</p>' +
       botones('Guardar trato') + '</form>');
@@ -3703,7 +3788,7 @@
       '<input type="hidden" name="proyectoId" value="' + pid + '">' +
       (t ? '<p class="ayuda" style="margin-top:0">' + esc(textoTrato(link)) + '</p>' : '') +
       (t ? campo('% del total acordado (opcional)', input('porcentaje', '', 'inputmode="numeric" placeholder="Ej: 60" data-cambio="pctPago" data-total="' + t.conIva + '"')) : '') +
-      '<div class="fila-campos">' + campo('Monto', input('monto', '', 'inputmode="numeric" required')) +
+      '<div class="fila-campos">' + campo('Monto', inputMonto('monto', '', 'inputmode="numeric" required')) +
       campo('Fecha', input('fecha', S.d.hoy, 'type="date"')) + '</div>' +
       campo('Nota (opcional)', input('nota', '', 'maxlength="300" placeholder="Adelanto, pago parcial…"')) +
       (t && t.saldo > 0.5 ? '<div class="barra-botones"><button type="button" class="btn btn-chico" data-a="pagarSaldo" data-saldo="' + Math.round(t.saldo) + '">Pagar el saldo restante (' + esc(pesos(t.saldo)) + ')</button></div>' : '') +
